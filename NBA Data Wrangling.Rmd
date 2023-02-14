@@ -1,0 +1,253 @@
+---
+title: "NBA Data Wrangling"
+author: "Tanner Hillison"
+date: '2022-09-14'
+output: html_document
+---
+
+Loading the Data
+```{r}
+require(tidyverse)
+require(tidymodels)
+require(rsample)
+
+gms <- readRDS("/Users/tanner/Desktop/Data Science/Data/game_summary.Rds")
+```
+
+
+#Question 1
+Which team had the most wins in 2017? Is it the same team that had the most wins in 2018? Which team had the most wins overall?
+```{r}
+#2017
+gms %>% 
+  filter(yearSeason == 2017) %>%
+  group_by(nameTeam) %>%
+  summarize(avg_win = mean(isWin, na.rm = T)) %>%
+  arrange(-avg_win)
+
+gms %>% 
+  filter(yearSeason == 2017) %>%
+  group_by(nameTeam) %>%
+  count(isWin) %>%
+  filter(isWin == 'TRUE') %>%
+  arrange(-n)
+
+#2018
+gms %>% 
+  filter(yearSeason == 2018) %>%
+  group_by(nameTeam) %>%
+  summarize(avg_win = mean(isWin, na.rm = T)) %>%
+  arrange(-avg_win)
+
+gms %>% 
+  filter(yearSeason == 2018) %>%
+  group_by(nameTeam) %>%
+  count(isWin) %>%
+  filter(isWin == 'TRUE') %>%
+  arrange(-n)
+
+#Overall
+gms %>% 
+  group_by(nameTeam) %>%
+  summarize(avg_win = mean(isWin, na.rm = T)) %>%
+  arrange(-avg_win)
+  
+gms %>% 
+  group_by(nameTeam) %>%
+  count(isWin) %>%
+  filter(isWin == 'TRUE') %>%
+  arrange(-n)
+```
+The Golden State Warrios had the most wins in 2017. The Houston Rockets had the most wins in 2018. The Golden State Warriors had the most wins overall.
+
+
+#Question 2
+Which team held the most wins-per-season overall? Which team held the least?
+```{r}
+gms %>% 
+  group_by(nameTeam) %>%
+  count(isWin) %>%
+  filter(isWin == 'TRUE') %>%
+  mutate(wins_per_season = n/3) %>%
+  select(wins_per_season) %>%
+  arrange(-wins_per_season)
+
+gms %>% 
+  group_by(nameTeam) %>%
+  count(isWin) %>%
+  filter(isWin == 'TRUE') %>%
+  mutate(wins_per_season = n/3) %>%
+  select(wins_per_season) %>%
+  arrange(wins_per_season)
+```
+The Golden State Warriors had the most wins per season. The Phoenix Suns had the least wins per season.
+
+
+#Question 3
+Is "home court advantage" real? (In other words, do teams win more games when they're playing at home?) For which team is the "home court advantage" largest? For which team does the "home court advantage" matter least? Is there any team with a "home court disadvantage"?
+```{r}
+gms %>%
+  group_by(nameTeam, locationGame) %>%
+  summarize(win_rate = mean(isWin, na.rm = T)) %>%
+  spread(locationGame, win_rate) %>%
+  mutate(win_diff = H - A) %>%
+  arrange(-win_diff)
+```
+Home court advantage seems to be real considering that every team has won more games at home as opposed to away. Home court advantage is largest for the San Antonio Spurs, and smallest for the Golden State Warriors. There are no teams with a home court disadvantage.
+
+
+#Question 4
+How confident are you that the home court advantage is real? Bootstrap sample 1,000 times with `size = 200`
+```{r}
+set.seed(123)
+
+bsSeasons <- NULL
+for(i in 1:1000){
+  bsSeasons <- gms %>%
+    sample_n(size = 200, replace = T) %>%
+    group_by(locationGame) %>%
+    summarize(win_rate = mean(isWin)) %>%
+    spread(locationGame, win_rate) %>%
+    mutate(home_court_adv = H - A) %>%
+    bind_rows(bsSeasons)
+}
+
+bsSeasons %>%
+  mutate(home_wins = ifelse(H > A, 1, 0)) %>% #creates dummy variable that represents number of teams in all the iterations that had more home wins than losses
+  summarize(mean_home_wins = mean(home_wins, na.rm = T))
+```
+This tells  us that we are 98.9% confident that home court advantage is real.
+
+
+#Question 5
+Why does the home court advantage exist? Is it because of fewer turnovers at home? How certain are you of your conclusion?
+```{r}
+set.seed(123)
+
+bs_tov <- NULL
+for(i in 1:1000) {
+  bs_tov <- gms %>%
+    sample_n(size = 200, replace = T) %>%
+    group_by(locationGame) %>%
+    summarize(avg_tov = mean(tov)) %>%
+    spread(locationGame, avg_tov) %>%
+    bind_rows(bs_tov)
+}
+
+bs_tov %>%
+  mutate(tov_hca = ifelse(A > H, 1, 0)) %>% 
+  summarize(tov_hca = mean(tov_hca)) %>%
+  select(tov_hca)
+```
+We are only 55.7% confident that the homecourt advantage exists because of fewer turnovers at home. (We normally like to be at least 90% confident)
+
+
+#Question 6
+Plot the home and away distributions of average turnovers from the Question 5.
+```{r}
+set.seed(123)
+
+bs_tov_plt <- NULL
+for(i in 1:1000) {
+  bs_tov_plt <- gms %>%
+    sample_n(size = 200, replace = T) %>%
+    group_by(locationGame) %>%
+    summarize(avg_tov = mean(tov)) %>%
+    bind_rows(bs_tov_plt)
+}
+
+bs_tov_plt %>%
+  ggplot(aes(x = avg_tov, fill = locationGame)) + geom_density(alpha = 0.2)
+```
+
+
+#Question 7
+Does your answer to Question 5 change if you look only at 2017 data? What about 2019 data?
+```{r}
+set.seed(123)
+
+bsSeasons <- NULL
+for(i in 1:1000) {
+  bsSeasons <- gms %>%
+    sample_n(size = 200, replace = T) %>%
+    group_by(yearSeason, locationGame) %>%
+    summarize(avg_tov = mean(tov), na.rm = T,.groups = 'drop') %>%
+    ungroup() %>%
+    mutate(bsInd = i) %>%
+    bind_rows(bsSeasons)
+}
+
+bsSeasons %>%
+  filter(yearSeason == 2017) %>%
+  group_by(yearSeason, locationGame) %>%
+  spread(locationGame, avg_tov) %>%
+  mutate(home_tov = ifelse(A > H, 1, 0)) %>% 
+  summarize(tov_adv = mean(home_tov))
+
+bsSeasons %>%
+  filter(yearSeason == 2019) %>%
+  group_by(yearSeason, locationGame) %>%
+  spread(locationGame, avg_tov) %>%
+  mutate(home_tov = ifelse(A > H, 1, 0)) %>% 
+  summarize(tov_adv = mean(home_tov))
+```
+Yes, but only slightly. For 2017, we are 54.7% confident that the homecourt advantage exists because of fewer turnovers at home. And for 2019, we are 53% confident that the homecourt advantage exists because of fewer turnovers at home.
+
+
+#Question 8
+Plot both of these conclusions. Overall, would you claim that the home court advantage is driven primarily by turnovers?
+```{r}
+set.seed(123)
+
+bsSeasons <- NULL
+for(i in 1:1000) {
+  bsSeasons <- gms %>%
+    group_by(yearSeason) %>%
+    sample_n(size = 200, replace = T) %>%
+    group_by(yearSeason, locationGame) %>%
+    summarize(avg_tov = mean(tov), na.rm = T,.groups = 'drop') %>%
+    spread(locationGame, avg_tov) %>%
+    mutate(tov_diff= H - A) %>%
+    mutate(bsSeasonNumber = i) %>%
+    bind_rows(bsSeasons)
+}
+
+bsSeasons %>%
+  ggplot(aes(x = tov_diff)) + geom_density(alpha = 0.3) + facet_grid(yearSeason~.)
+```
+Overall, I would probably say that home court advantage is not primarily driven by turnovers. Firstly, in question 8 we saw that we are only about 55% confident that the homecourt advantage exists because of fewer turnovers at home. Addtionally, the graphs that we made for this question all center close to zero, meaning that it is probably not the most significant factor.
+
+
+#Question 9
+What about rebounds? Is there evidence to support the conclusion that NBA teams get more rebounds at home compared to when they are away? How confident are you in this conclusion?
+```{r}
+set.seed(123)
+
+bs_reb <- NULL
+for(i in 1:1000) {
+  bs_reb <- gms %>%
+    sample_n(size = 200, replace = T) %>%
+    group_by(locationGame) %>%
+    summarize(avg_reb = mean(treb)) %>%
+    spread(locationGame, avg_reb) %>%
+    bind_rows(bs_reb)
+}
+
+bs_reb %>%
+  mutate(reb_hca = ifelse(H > A, 1, 0)) %>% 
+  summarize(reb_hca = mean(reb_hca)) %>%
+  select(reb_hca)
+
+bs_reb_plt <- NULL
+for(i in 1:1000) {
+  bs_reb_plt <- gms %>%
+    sample_n(size = 200, replace = T) %>%
+    group_by(locationGame) %>%
+    summarize(avg_reb = mean(treb)) %>%
+    bind_rows(bs_reb_plt)
+}
+
+bs_reb_plt %>%
+  ggplot(aes(x = avg_reb, fill = locationGame)) + geom_density(alpha = 0.2)
+```
+We are 89.9% confident that the homecourt advantage exists because of more rebounds at home.
